@@ -48,17 +48,19 @@ func HandleWebhook(c *gin.Context) {
 
 	// 訊息路由分發
 	switch {
-	case text == "/新增格式" || text == "/start":
+	case text == "/start":
 		services.SendMessage(chatID, FormatUsage())
 
-	case text == "/查詢分類":
+	case text == "/查詢分類" || text == "/categories" || text == "/分類" ||
+		(strings.Contains(text, "/") && strings.Contains(text, "類")):
 		services.SendMessage(chatID, FormatCategories())
 
-	case text == "/查詢帳戶":
+	case text == "/查詢帳戶" || text == "/accounts" || text == "/帳戶" ||
+		(strings.Contains(text, "/") && strings.Contains(text, "帳")):
 		services.SendMessage(chatID, FormatAccounts())
 
 	case strings.HasPrefix(text, "/"):
-		services.SendMessage(chatID, "未知指令，可用指令：\n/新增格式\n/查詢分類\n/查詢帳戶")
+		services.SendMessage(chatID, "未知指令，可用指令： /start、/account、/categories")
 
 	default:
 		// 嘗試解析為新增紀錄
