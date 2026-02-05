@@ -23,6 +23,7 @@ include __DIR__ . '/components/header.php';
             <button class="btn-cancel" id="modal-cancel">取消</button>
             <button class="btn-confirm" id="modal-confirm">確定</button>
         </div>
+        <button id="modal-delete" style="display:none;width:100%;margin-top:8px;padding:8px;border:1px solid #e74c3c;border-radius:6px;background:#fff;color:#e74c3c;font-size:14px;cursor:pointer;">刪除此帳戶</button>
     </div>
 </div>
 
@@ -62,6 +63,7 @@ include __DIR__ . '/components/header.php';
                     document.getElementById('modal-title').textContent = '編輯帳戶';
                     document.getElementById('modal-name').value = el.dataset.name;
                     document.getElementById('modal-balance').value = el.dataset.balance;
+                    document.getElementById('modal-delete').style.display = 'block';
                     document.getElementById('modal').classList.add('active');
                 });
             });
@@ -76,6 +78,7 @@ include __DIR__ . '/components/header.php';
         document.getElementById('modal-title').textContent = '新增帳戶';
         document.getElementById('modal-name').value = '';
         document.getElementById('modal-balance').value = '0';
+        document.getElementById('modal-delete').style.display = 'none';
         document.getElementById('modal').classList.add('active');
     });
 
@@ -106,6 +109,22 @@ include __DIR__ . '/components/header.php';
             loadAccounts();
         } catch (e) {
             showToast(e.message || '操作失敗');
+        }
+    });
+
+    // 刪除帳戶
+    document.getElementById('modal-delete').addEventListener('click', async () => {
+        if (!editingId) return;
+        const name = document.getElementById('modal-name').value;
+        if (!confirm(`確定要刪除帳戶「${name}」嗎？`)) return;
+
+        try {
+            await API.deleteAccount(editingId);
+            showToast('刪除成功');
+            document.getElementById('modal').classList.remove('active');
+            loadAccounts();
+        } catch (e) {
+            showToast(e.message || '刪除失敗');
         }
     });
 

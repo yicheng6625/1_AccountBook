@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title><?= $pageTitle ?? '記帳本' ?></title>
     <link rel="stylesheet" href="/assets/css/style.css">
+    <script src="/assets/js/api.js"></script>
+<?php if (isset($extraScripts)): ?>
+<?php foreach ($extraScripts as $script): ?>
+    <script src="<?= $script ?>"></script>
+<?php endforeach; ?>
+<?php endif; ?>
 </head>
 <body>
 <div class="app-container">
