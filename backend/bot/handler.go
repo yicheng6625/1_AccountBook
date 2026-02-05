@@ -6,30 +6,41 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// TelegramUpdate Telegram 推播的更新結構
+// === Telegram 資料結構 ===
+
+// TelegramUpdate Telegram Webhook 推播的完整結構
+// 原因：需同時處理一般訊息 (message) 和按鈕回調 (callback_query)
 type TelegramUpdate struct {
-	Message *TelegramMessage `json:"message"`
+	Message       *TelegramMessage       `json:"message"`
+	CallbackQuery *TelegramCallbackQuery `json:"callback_query"`
 }
 
-// TelegramMessage Telegram 訊息結構
 type TelegramMessage struct {
-	Chat *TelegramChat `json:"chat"`
-	Text string        `json:"text"`
+	MessageID int           `json:"message_id"`
+	Chat      *TelegramChat `json:"chat"`
+	Text      string        `json:"text"`
 }
 
-// TelegramChat Telegram 聊天室結構
 type TelegramChat struct {
 	ID int64 `json:"id"`
 }
 
+type TelegramCallbackQuery struct {
+	ID      string           `json:"id"`
+	Message *TelegramMessage `json:"message"`
+	Data    string           `json:"data"`
+}
+
+// === Webhook 入口 ===
+
 // HandleWebhook 處理 Telegram Webhook 推播
-// 原因：接收 Telegram 訊息，依據內容分發到對應處理邏輯
 func HandleWebhook(c *gin.Context) {
 	var update TelegramUpdate
 	if err := json.NewDecoder(c.Request.Body).Decode(&update); err != nil {
@@ -37,47 +48,252 @@ func HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	// 忽略非文字訊息
-	if update.Message == nil || update.Message.Text == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+	// 處理按鈕回調（Callback Query）
+	if update.CallbackQuery != nil {
+		handleCallbackQuery(update.CallbackQuery)
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
 
-	chatID := update.Message.Chat.ID
-	text := strings.TrimSpace(update.Message.Text)
-
-	// 訊息路由分發
-	switch {
-	case text == "/start":
-		services.SendMessage(chatID, FormatUsage())
-
-	case text == "/查詢分類" || text == "/categories" || text == "/分類" ||
-		(strings.Contains(text, "/") && strings.Contains(text, "類")):
-		services.SendMessage(chatID, FormatCategories())
-
-	case text == "/查詢帳戶" || text == "/accounts" || text == "/帳戶" ||
-		(strings.Contains(text, "/") && strings.Contains(text, "帳")):
-		services.SendMessage(chatID, FormatAccounts())
-
-	case strings.HasPrefix(text, "/"):
-		services.SendMessage(chatID, "未知指令，可用指令： /start、/account、/categories")
-
-	default:
-		// 嘗試解析為新增紀錄
-		handleNewRecord(chatID, text)
+	// 處理一般訊息
+	if update.Message != nil && update.Message.Text != "" {
+		handleMessage(update.Message)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// handleNewRecord 處理新增紀錄的訊息
-// 原因：解析多行格式，新增紀錄並回覆結果
-func handleNewRecord(chatID int64, text string) {
-	record, err := ParseRecord(text)
-	if err != nil {
-		log.Printf("解析紀錄失敗: %v", err)
-		services.SendMessage(chatID, FormatError())
+// === 一般訊息處理 ===
+
+func handleMessage(msg *TelegramMessage) {
+	chatID := msg.Chat.ID
+	text := strings.TrimSpace(msg.Text)
+
+	// 指令處理
+	switch {
+	case text == "/start":
+		services.SendMessage(chatID, FormatUsage())
 		return
+
+	case text == "/查詢分類" || text == "/categories" || text == "/分類":
+		services.SendMessage(chatID, FormatCategories())
+		return
+
+	case text == "/查詢帳戶" || text == "/accounts" || text == "/帳戶":
+		services.SendMessage(chatID, FormatAccounts())
+		return
+
+	case text == "/cancel" || text == "/取消":
+		DeleteSession(chatID)
+		services.SendMessage(chatID, "已取消")
+		return
+
+	case strings.HasPrefix(text, "/"):
+		services.SendMessage(chatID, "未知指令，可用指令：/start、/查詢帳戶、/查詢分類")
+		return
+	}
+
+	// 檢查是否有進行中的會話（等待使用者輸入欄位值）
+	session := GetSession(chatID)
+	if session != nil && session.State != StatePreview && session.State != StateIdle {
+		handleFieldInput(chatID, msg.MessageID, session, text)
+		return
+	}
+
+	// 非指令、無會話 → 開始新增紀錄流程
+	startNewRecord(chatID)
+}
+
+// startNewRecord 啟動互動式新增紀錄流程
+// 原因：建立帶有預設值的會話，發送預覽訊息搭配 Inline Keyboard
+func startNewRecord(chatID int64) {
+	session := NewSession(chatID)
+
+	text := FormatPreview(session)
+	keyboard := BuildPreviewKeyboard(session)
+
+	msgID, err := services.SendMessageWithKeyboard(chatID, text, keyboard)
+	if err != nil {
+		log.Printf("發送預覽訊息失敗: %v", err)
+		return
+	}
+
+	session.MessageID = msgID
+}
+
+// handleFieldInput 處理使用者輸入的欄位值
+// 原因：使用者點擊「修改日期」等按鈕後，Bot 等待使用者輸入文字
+func handleFieldInput(chatID int64, userMsgID int, session *Session, text string) {
+	switch session.State {
+	case StateEditDate:
+		date, err := parseDate(text)
+		if err != nil {
+			services.SendMessage(chatID, "❌ 日期格式錯誤，請輸入如：今天、昨天、2026/01/15、01/15")
+			return
+		}
+		session.Date = date
+
+	case StateEditAmt:
+		amount, err := parseAmount(text)
+		if err != nil {
+			services.SendMessage(chatID, "❌ 請輸入正確的金額（數字）")
+			return
+		}
+		session.Amount = amount
+
+	case StateEditItem:
+		session.Item = text
+
+	case StateEditNote:
+		session.Note = text
+	}
+
+	// 回到預覽狀態，更新預覽訊息
+	session.State = StatePreview
+
+	// 刪除使用者的輸入訊息，保持聊天室整潔
+	services.DeleteMessage(chatID, userMsgID)
+
+	// 更新預覽訊息
+	updatePreview(chatID, session)
+}
+
+// updatePreview 更新預覽訊息的文字與鍵盤
+func updatePreview(chatID int64, session *Session) {
+	text := FormatPreview(session)
+	keyboard := BuildPreviewKeyboard(session)
+
+	if session.MessageID > 0 {
+		services.EditMessageWithKeyboard(chatID, session.MessageID, text, keyboard)
+	}
+}
+
+// === Callback Query 處理（按鈕點擊）===
+
+func handleCallbackQuery(cq *TelegramCallbackQuery) {
+	chatID := cq.Message.Chat.ID
+	data := cq.Data
+
+	// 先回應 callback（消除按鈕 loading）
+	services.AnswerCallbackQuery(cq.ID, "")
+
+	session := GetSession(chatID)
+
+	// 若無會話但收到 callback，可能是過期的按鈕
+	if session == nil {
+		// 若是開始新增的指令，建立新會話
+		if data == "new_record" {
+			startNewRecord(chatID)
+			return
+		}
+		services.AnswerCallbackQuery(cq.ID, "此操作已過期，請重新開始")
+		return
+	}
+
+	switch {
+	// 編輯日期：顯示快捷日期選擇鍵盤
+	case data == "edit_date":
+		keyboard := BuildDateKeyboard()
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"📅 選擇日期，或直接輸入（如：2026/01/15、01/15）", keyboard)
+		session.State = StateEditDate
+
+	// 快捷日期選擇
+	case strings.HasPrefix(data, "set_date_"):
+		offsetStr := strings.TrimPrefix(data, "set_date_")
+		offset, _ := strconv.Atoi(offsetStr)
+		session.Date = time.Now().AddDate(0, 0, offset).Format("2006-01-02")
+		session.State = StatePreview
+		updatePreview(chatID, session)
+
+	// 編輯帳戶：顯示帳戶選擇鍵盤
+	case data == "edit_account":
+		keyboard := BuildAccountKeyboard()
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"🏦 選擇帳戶：", keyboard)
+
+	// 選擇帳戶
+	case strings.HasPrefix(data, "set_account_"):
+		idStr := strings.TrimPrefix(data, "set_account_")
+		id, _ := strconv.Atoi(idStr)
+		session.AccountID = id
+		session.State = StatePreview
+		updatePreview(chatID, session)
+
+	// 編輯類型：顯示收入/支出選擇
+	case data == "edit_type":
+		keyboard := BuildTypeKeyboard()
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"💱 選擇類型：", keyboard)
+
+	// 選擇類型
+	case strings.HasPrefix(data, "set_type_"):
+		session.Type = strings.TrimPrefix(data, "set_type_")
+		session.State = StatePreview
+		updatePreview(chatID, session)
+
+	// 編輯金額：等待使用者輸入
+	case data == "edit_amount":
+		session.State = StateEditAmt
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"💰 請輸入金額：", services.InlineKeyboardMarkup{})
+
+	// 編輯項目：等待使用者輸入
+	case data == "edit_item":
+		session.State = StateEditItem
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"📝 請輸入項目名稱：", services.InlineKeyboardMarkup{})
+
+	// 編輯分類：顯示分類選擇鍵盤
+	case data == "edit_category":
+		keyboard := BuildCategoryKeyboard()
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"🏷 選擇分類：", keyboard)
+
+	// 選擇分類
+	case strings.HasPrefix(data, "set_category_"):
+		idStr := strings.TrimPrefix(data, "set_category_")
+		id, _ := strconv.Atoi(idStr)
+		session.CategoryID = id
+		session.State = StatePreview
+		updatePreview(chatID, session)
+
+	// 編輯備註：等待使用者輸入
+	case data == "edit_note":
+		session.State = StateEditNote
+		services.EditMessageWithKeyboard(chatID, session.MessageID,
+			"📌 請輸入備註（輸入「無」可清除）：", services.InlineKeyboardMarkup{})
+
+	// 確認送出
+	case data == "confirm":
+		handleConfirm(chatID, session)
+
+	// 取消
+	case data == "cancel":
+		DeleteSession(chatID)
+		services.EditMessageText(chatID, session.MessageID, "❌ 已取消新增紀錄")
+	}
+}
+
+// handleConfirm 確認送出紀錄
+// 原因：驗證必填欄位後，寫入資料庫並更新帳戶餘額
+func handleConfirm(chatID int64, session *Session) {
+	// 驗證必填欄位
+	if session.Amount <= 0 {
+		services.AnswerCallbackQuery("", "請先填寫金額")
+		updatePreview(chatID, session)
+		services.SendMessage(chatID, "⚠️ 請先點擊「💰 金額」填寫金額")
+		return
+	}
+	if session.Item == "" {
+		updatePreview(chatID, session)
+		services.SendMessage(chatID, "⚠️ 請先點擊「📝 項目」填寫項目名稱")
+		return
+	}
+
+	// 備註為「無」時清除
+	if session.Note == "無" {
+		session.Note = ""
 	}
 
 	// 使用 Transaction 新增紀錄並更新帳戶餘額
@@ -91,19 +307,20 @@ func handleNewRecord(chatID int64, text string) {
 
 	_, err = tx.Exec(
 		"INSERT INTO records (date, account_id, type, amount, item, category_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		record.Date, record.AccountID, record.Type, record.Amount, record.Item, record.CategoryID, record.Note, now, now,
+		session.Date, session.AccountID, session.Type, session.Amount, session.Item, session.CategoryID, session.Note, now, now,
 	)
 	if err != nil {
 		tx.Rollback()
-		services.SendMessage(chatID, FormatError())
+		services.SendMessage(chatID, "新增紀錄失敗")
+		log.Printf("新增紀錄失敗: %v", err)
 		return
 	}
 
 	// 更新帳戶餘額
-	if record.Type == "支出" {
-		tx.Exec("UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ?", record.Amount, now, record.AccountID)
+	if session.Type == "支出" {
+		tx.Exec("UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ?", session.Amount, now, session.AccountID)
 	} else {
-		tx.Exec("UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ?", record.Amount, now, record.AccountID)
+		tx.Exec("UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ?", session.Amount, now, session.AccountID)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -111,12 +328,15 @@ func handleNewRecord(chatID int64, text string) {
 		return
 	}
 
-	// 查詢帳戶與分類名稱
-	var accountName, categoryName string
-	initializers.DB.QueryRow("SELECT name FROM accounts WHERE id = ?", record.AccountID).Scan(&accountName)
-	initializers.DB.QueryRow("SELECT name FROM categories WHERE id = ?", record.CategoryID).Scan(&categoryName)
+	// 取得名稱用於回覆
+	accountName := resolveAccountName(session.AccountID)
+	categoryName := resolveCategoryName(session.CategoryID)
 
-	// 回覆成功訊息
-	reply := FormatSuccess(record.Date, accountName, record.Type, record.Amount, record.Item, categoryName, record.Note)
-	services.SendMessage(chatID, reply)
+	// 更新預覽訊息為成功訊息（移除鍵盤）
+	successMsg := FormatSuccess(session.Date, accountName, session.Type, session.Amount, session.Item, categoryName, session.Note)
+	services.EditMessageText(chatID, session.MessageID, successMsg)
+
+	// 清除會話
+	DeleteSession(chatID)
 }
+
