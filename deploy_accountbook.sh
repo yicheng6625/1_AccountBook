@@ -5,7 +5,7 @@
 set -e  # 遇到錯誤立即停止
 
 # 專案路徑（請依實際情況修改）
-PROJECT_DIR="/Users/steven/Documents/Git/AccountBook"
+PROJECT_DIR="/Users/steven/Documents/GitHub/AccountBook"
 
 echo "=========================================="
 echo "開始部署 AccountBook"
