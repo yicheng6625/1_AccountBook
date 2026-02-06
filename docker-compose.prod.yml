@@ -3,7 +3,7 @@
 
 services:
   backend:
-    image: ghcr.io/yicheng6625/1_accountbook/backend:latest
+    image: ghcr.io/yicheng6625/accountbook/backend:latest
     container_name: accountbook_backend
     restart: unless-stopped
     ports:
@@ -17,7 +17,7 @@ services:
       - accountbook-network
 
   frontend:
-    image: ghcr.io/yicheng6625/1_accountbook/frontend:latest
+    image: ghcr.io/yicheng6625/accountbook/frontend:latest
     container_name: accountbook_frontend
     restart: unless-stopped
     ports:
