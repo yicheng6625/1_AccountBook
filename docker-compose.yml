@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # GoLang 後端 API 服務
   backend:

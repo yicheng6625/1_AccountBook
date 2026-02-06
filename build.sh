@@ -29,4 +29,4 @@ echo ""
 echo "接下來將執行："
 echo "  docker compose up -d --build"
 
-docker compose up -d --build --pull=false
+docker compose up -d --build --pull never
