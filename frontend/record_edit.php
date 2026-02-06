@@ -76,8 +76,9 @@ include __DIR__ . '/components/header.php';
                 categorySelect.appendChild(opt);
             });
 
-            // 填入紀錄資料
-            document.getElementById('record-date').value = record.date;
+            // 填入紀錄資料（日期格式需為 YYYY-MM-DD，原因：<input type="date"> 只接受此格式）
+            const dateValue = record.date ? record.date.substring(0, 10) : '';
+            document.getElementById('record-date').value = dateValue;
             accountSelect.value = record.account_id;
             document.querySelector(`input[name="type"][value="${record.type}"]`).checked = true;
             document.getElementById('record-amount').value = record.amount;
