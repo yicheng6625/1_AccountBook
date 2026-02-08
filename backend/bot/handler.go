@@ -87,13 +87,17 @@ func handleMessage(msg *TelegramMessage) {
 		startNewRecord(chatID)
 		return
 
+	case text == "/recent" || text == "/最近":
+		handleRecentRecords(chatID, 0)
+		return
+
 	case text == "/cancel" || text == "/取消":
 		DeleteSession(chatID)
 		services.SendMessage(chatID, "已取消")
 		return
 
 	case strings.HasPrefix(text, "/"):
-		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/查詢帳戶、/查詢分類")
+		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/recent、/查詢帳戶、/查詢分類")
 		return
 	}
 
@@ -186,6 +190,17 @@ func handleCallbackQuery(cq *TelegramCallbackQuery) {
 
 	// 先回應 callback（消除按鈕 loading）
 	services.AnswerCallbackQuery(cq.ID, "")
+
+	// 處理翻頁按鈕（不需要會話）
+	if strings.HasPrefix(data, "recent_page_") {
+		offsetStr := strings.TrimPrefix(data, "recent_page_")
+		offset, _ := strconv.Atoi(offsetStr)
+		const pageSize = 5
+		text, total := FormatRecentRecords(offset, pageSize)
+		keyboard := BuildPaginationKeyboard(offset, pageSize, total)
+		services.EditMessageWithKeyboard(chatID, cq.Message.MessageID, text, keyboard)
+		return
+	}
 
 	session := GetSession(chatID)
 
@@ -282,6 +297,19 @@ func handleCallbackQuery(cq *TelegramCallbackQuery) {
 	case data == "cancel":
 		DeleteSession(chatID)
 		services.EditMessageText(chatID, session.MessageID, "❌ 已取消新增紀錄")
+	}
+}
+
+// handleRecentRecords 查詢最近紀錄並發送帶翻頁按鈕的訊息
+func handleRecentRecords(chatID int64, offset int) {
+	const pageSize = 5
+	text, total := FormatRecentRecords(offset, pageSize)
+	keyboard := BuildPaginationKeyboard(offset, pageSize, total)
+
+	if len(keyboard.InlineKeyboard) > 0 {
+		services.SendMessageWithKeyboard(chatID, text, keyboard)
+	} else {
+		services.SendMessage(chatID, text)
 	}
 }
 
