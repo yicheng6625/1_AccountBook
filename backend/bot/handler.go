@@ -87,13 +87,17 @@ func handleMessage(msg *TelegramMessage) {
 		startNewRecord(chatID)
 		return
 
+	case text == "/recent" || text == "/最近":
+		handleRecentRecords(chatID, 0)
+		return
+
 	case text == "/cancel" || text == "/取消":
 		DeleteSession(chatID)
 		services.SendMessage(chatID, "已取消")
 		return
 
 	case strings.HasPrefix(text, "/"):
-		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/查詢帳戶、/查詢分類")
+		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/recent、/查詢帳戶、/查詢分類")
 		return
 	}
 
@@ -104,8 +108,8 @@ func handleMessage(msg *TelegramMessage) {
 		return
 	}
 
-	// 非指令、無會話 → 開始新增紀錄流程
-	startNewRecord(chatID)
+	// 非指令、無會話 → 嘗試解析快捷輸入後開始新增紀錄流程
+	startNewRecordWithQuickInput(chatID, text)
 }
 
 // startNewRecord 啟動互動式新增紀錄流程
@@ -186,6 +190,17 @@ func handleCallbackQuery(cq *TelegramCallbackQuery) {
 
 	// 先回應 callback（消除按鈕 loading）
 	services.AnswerCallbackQuery(cq.ID, "")
+
+	// 處理翻頁按鈕（不需要會話）
+	if strings.HasPrefix(data, "recent_page_") {
+		offsetStr := strings.TrimPrefix(data, "recent_page_")
+		offset, _ := strconv.Atoi(offsetStr)
+		const pageSize = 5
+		text, total := FormatRecentRecords(offset, pageSize)
+		keyboard := BuildPaginationKeyboard(offset, pageSize, total)
+		services.EditMessageWithKeyboard(chatID, cq.Message.MessageID, text, keyboard)
+		return
+	}
 
 	session := GetSession(chatID)
 
@@ -282,6 +297,71 @@ func handleCallbackQuery(cq *TelegramCallbackQuery) {
 	case data == "cancel":
 		DeleteSession(chatID)
 		services.EditMessageText(chatID, session.MessageID, "❌ 已取消新增紀錄")
+	}
+}
+
+// startNewRecordWithQuickInput 解析快捷輸入並帶入欄位後開始新增紀錄
+// 支援格式：
+//   - 純數字（如 "150"）→ 帶入金額
+//   - "文字 數字"（如 "午餐 150"）→ 帶入項目名稱 + 金額
+//   - "數字 文字"（如 "150 午餐"）→ 帶入金額 + 項目名稱
+func startNewRecordWithQuickInput(chatID int64, text string) {
+	session := NewSession(chatID)
+
+	// 嘗試解析快捷格式
+	item, amount := parseQuickInput(text)
+	if amount > 0 {
+		session.Amount = amount
+	}
+	if item != "" {
+		session.Item = item
+	}
+
+	text2 := FormatPreview(session)
+	keyboard := BuildPreviewKeyboard(session)
+
+	msgID, err := services.SendMessageWithKeyboard(chatID, text2, keyboard)
+	if err != nil {
+		log.Printf("發送預覽訊息失敗: %v", err)
+		return
+	}
+
+	session.MessageID = msgID
+}
+
+// parseQuickInput 解析快捷輸入文字，回傳項目名稱與金額
+func parseQuickInput(text string) (item string, amount float64) {
+	// 純數字 → 金額
+	if a, err := strconv.ParseFloat(text, 64); err == nil && a > 0 {
+		return "", a
+	}
+
+	// 以空白分割，嘗試「文字 數字」或「數字 文字」
+	parts := strings.Fields(text)
+	if len(parts) == 2 {
+		// 「文字 數字」
+		if a, err := strconv.ParseFloat(parts[1], 64); err == nil && a > 0 {
+			return parts[0], a
+		}
+		// 「數字 文字」
+		if a, err := strconv.ParseFloat(parts[0], 64); err == nil && a > 0 {
+			return parts[1], a
+		}
+	}
+
+	return "", 0
+}
+
+// handleRecentRecords 查詢最近紀錄並發送帶翻頁按鈕的訊息
+func handleRecentRecords(chatID int64, offset int) {
+	const pageSize = 5
+	text, total := FormatRecentRecords(offset, pageSize)
+	keyboard := BuildPaginationKeyboard(offset, pageSize, total)
+
+	if len(keyboard.InlineKeyboard) > 0 {
+		services.SendMessageWithKeyboard(chatID, text, keyboard)
+	} else {
+		services.SendMessage(chatID, text)
 	}
 }
 

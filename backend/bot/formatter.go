@@ -197,6 +197,76 @@ func resolveCategoryName(id int) string {
 	return name
 }
 
+// FormatRecentRecords 格式化最近紀錄的查詢結果（分頁顯示）
+func FormatRecentRecords(offset, pageSize int) (string, int) {
+	// 先查詢總筆數
+	var total int
+	initializers.DB.QueryRow("SELECT COUNT(*) FROM records").Scan(&total)
+
+	if total == 0 {
+		return "📭 目前沒有任何紀錄", 0
+	}
+
+	rows, err := initializers.DB.Query(`
+		SELECT r.date, a.name, r.type, r.amount, r.item, c.name, r.note
+		FROM records r
+		LEFT JOIN accounts a ON r.account_id = a.id
+		LEFT JOIN categories c ON r.category_id = c.id
+		ORDER BY r.date DESC, r.id DESC
+		LIMIT ? OFFSET ?
+	`, pageSize, offset)
+	if err != nil {
+		return "查詢紀錄失敗", 0
+	}
+	defer rows.Close()
+
+	var lines []string
+	for rows.Next() {
+		var date, accountName, recordType, item, categoryName, note string
+		var amount float64
+		rows.Scan(&date, &accountName, &recordType, &amount, &item, &categoryName, &note)
+
+		line := fmt.Sprintf("📅 %s｜%s %.0f\n📝 %s｜🏷 %s｜🏦 %s",
+			date, recordType, amount, item, categoryName, accountName)
+		if note != "" {
+			line += fmt.Sprintf("\n📌 %s", note)
+		}
+		lines = append(lines, line)
+	}
+
+	page := offset/pageSize + 1
+	totalPages := (total + pageSize - 1) / pageSize
+	header := fmt.Sprintf("📋 最近紀錄（第 %d/%d 頁）\n", page, totalPages)
+
+	return header + "\n" + strings.Join(lines, "\n\n"), total
+}
+
+// BuildPaginationKeyboard 建立翻頁按鈕
+func BuildPaginationKeyboard(offset, pageSize, total int) services.InlineKeyboardMarkup {
+	var row []services.InlineKeyboardButton
+
+	if offset > 0 {
+		row = append(row, services.InlineKeyboardButton{
+			Text:         "⬅️ 上一頁",
+			CallbackData: fmt.Sprintf("recent_page_%d", offset-pageSize),
+		})
+	}
+
+	if offset+pageSize < total {
+		row = append(row, services.InlineKeyboardButton{
+			Text:         "➡️ 下一頁",
+			CallbackData: fmt.Sprintf("recent_page_%d", offset+pageSize),
+		})
+	}
+
+	var buttons [][]services.InlineKeyboardButton
+	if len(row) > 0 {
+		buttons = append(buttons, row)
+	}
+
+	return services.InlineKeyboardMarkup{InlineKeyboard: buttons}
+}
+
 // === 以下保留原有的查詢格式化功能 ===
 
 // FormatCategories 格式化分類列表
@@ -249,6 +319,7 @@ func FormatUsage() string {
 
 指令列表：
 /new - 開始記帳
+/recent - 查看最近紀錄
 /start - 顯示此說明
 /查詢分類 - 查看所有分類
 /查詢帳戶 - 查看所有帳戶餘額
