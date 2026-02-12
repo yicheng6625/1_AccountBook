@@ -35,6 +35,9 @@ include __DIR__ . '/components/header.php';
         const listEl = document.getElementById('record-list');
         const summaryEl = document.getElementById('day-summary');
 
+        // 顯示 Loading 動畫
+        listEl.innerHTML = '<li class="loading-message"><span class="loading-spinner"></span>載入中...</li>';
+
         try {
             const data = await API.getRecordsByDate(date);
 
