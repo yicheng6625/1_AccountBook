@@ -80,4 +80,29 @@ include __DIR__ . '/components/header.php';
     }
 </script>
 
+<style>
+.loading-message {
+    text-align: center;
+    padding: 32px 16px;
+    color: #999;
+    font-size: 13px;
+    list-style: none;
+}
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #e0e0e0;
+    border-top-color: #4A90D9;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>
+ 
+
 <?php include __DIR__ . '/components/footer.php'; ?>
