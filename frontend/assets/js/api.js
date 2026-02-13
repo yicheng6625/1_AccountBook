@@ -104,6 +104,28 @@ const API = {
         return this.request('/transfer', { method: 'POST', body: data });
     },
 
+    // ========== 快捷新增 ==========
+
+    getQuickAddTemplates() {
+        return this.request('/quick-add');
+    },
+
+    createQuickAddTemplate(data) {
+        return this.request('/quick-add', { method: 'POST', body: data });
+    },
+
+    updateQuickAddTemplate(id, data) {
+        return this.request(`/quick-add/${id}`, { method: 'PUT', body: data });
+    },
+
+    deleteQuickAddTemplate(id) {
+        return this.request(`/quick-add/${id}`, { method: 'DELETE' });
+    },
+
+    executeQuickAdd(id) {
+        return this.request(`/quick-add/${id}/execute`, { method: 'POST' });
+    },
+
     // ========== 統計 ==========
 
     getStatistics(month, { accountId, categoryId } = {}) {

@@ -3,6 +3,7 @@ package bot
 import (
 	"accountbook/initializers"
 	"accountbook/services"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -96,13 +97,17 @@ func handleMessage(msg *TelegramMessage) {
 		startTransfer(chatID)
 		return
 
+	case text == "/quickadd" || text == "/快捷":
+		handleQuickAddList(chatID)
+		return
+
 	case text == "/cancel" || text == "/取消":
 		DeleteSession(chatID)
 		services.SendMessage(chatID, "已取消")
 		return
 
 	case strings.HasPrefix(text, "/"):
-		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/transfer、/recent、/查詢帳戶、/查詢分類")
+		services.SendMessage(chatID, "未知指令，可用指令：/start、/new、/transfer、/quickadd、/recent、/查詢帳戶、/查詢分類")
 		return
 	}
 
@@ -218,6 +223,13 @@ func handleCallbackQuery(cq *TelegramCallbackQuery) {
 
 	// 先回應 callback（消除按鈕 loading）
 	services.AnswerCallbackQuery(cq.ID, "")
+
+	// 處理快捷新增按鈕（不需要會話）
+	if strings.HasPrefix(data, "quickadd_exec_") {
+		idStr := strings.TrimPrefix(data, "quickadd_exec_")
+		handleQuickAddExecute(chatID, cq.Message.MessageID, idStr)
+		return
+	}
 
 	// 處理翻頁按鈕（不需要會話）
 	if strings.HasPrefix(data, "recent_page_") {
@@ -646,5 +658,199 @@ func handleConfirm(chatID int64, session *Session) {
 
 	// 清除會話
 	DeleteSession(chatID)
+}
+
+// === 快捷新增功能 ===
+
+// handleQuickAddList 顯示所有快捷範本按鈕
+func handleQuickAddList(chatID int64) {
+	rows, err := initializers.DB.Query(`
+		SELECT q.id, q.name, q.template_type,
+			COALESCE(a.name, ''), q.type, q.amount, q.item,
+			COALESCE(a2.name, '')
+		FROM quick_add_templates q
+		LEFT JOIN accounts a ON q.account_id = a.id
+		LEFT JOIN accounts a2 ON q.to_account_id = a2.id
+		ORDER BY q.sort_order, q.id
+	`)
+	if err != nil {
+		services.SendMessage(chatID, "查詢快捷範本失敗")
+		return
+	}
+	defer rows.Close()
+
+	type tmplInfo struct {
+		ID           int
+		Name         string
+		TemplateType string
+		AccountName  string
+		Type         string
+		Amount       float64
+		Item         string
+		ToAccName    string
+	}
+
+	var templates []tmplInfo
+	for rows.Next() {
+		var t tmplInfo
+		rows.Scan(&t.ID, &t.Name, &t.TemplateType, &t.AccountName, &t.Type, &t.Amount, &t.Item, &t.ToAccName)
+		templates = append(templates, t)
+	}
+
+	if len(templates) == 0 {
+		services.SendMessage(chatID, "尚無快捷範本，請在網頁設定頁面新增")
+		return
+	}
+
+	// 建立訊息文字
+	text := "⚡ 快捷新增\n\n點擊按鈕立即新增一筆紀錄：\n"
+	for _, t := range templates {
+		if t.TemplateType == "transfer" {
+			text += fmt.Sprintf("\n• %s — 轉帳 %s→%s $%.0f", t.Name, t.AccountName, t.ToAccName, t.Amount)
+		} else {
+			text += fmt.Sprintf("\n• %s — %s %s $%.0f", t.Name, t.Type, t.Item, t.Amount)
+		}
+	}
+
+	// 建立按鈕鍵盤
+	var buttons [][]services.InlineKeyboardButton
+	var row []services.InlineKeyboardButton
+	for _, t := range templates {
+		row = append(row, services.InlineKeyboardButton{
+			Text:         t.Name,
+			CallbackData: fmt.Sprintf("quickadd_exec_%d", t.ID),
+		})
+		if len(row) == 2 {
+			buttons = append(buttons, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		buttons = append(buttons, row)
+	}
+
+	keyboard := services.InlineKeyboardMarkup{InlineKeyboard: buttons}
+	services.SendMessageWithKeyboard(chatID, text, keyboard)
+}
+
+// handleQuickAddExecute 執行快捷範本
+func handleQuickAddExecute(chatID int64, msgID int, idStr string) {
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		services.SendMessage(chatID, "無效的範本 ID")
+		return
+	}
+
+	// 查詢範本
+	var templateType, tmplType, item, note, name string
+	var accountID, categoryID, toAccountID int
+	var amount float64
+	var hasAccount, hasCategory, hasToAccount bool
+
+	var accIDNull, catIDNull, toAccIDNull sql.NullInt64
+	err = initializers.DB.QueryRow(`
+		SELECT id, name, template_type, account_id, type, amount, item, category_id, note, to_account_id
+		FROM quick_add_templates WHERE id = ?
+	`, id).Scan(&id, &name, &templateType, &accIDNull, &tmplType, &amount, &item, &catIDNull, &note, &toAccIDNull)
+	if err != nil {
+		services.SendMessage(chatID, "找不到該快捷範本")
+		return
+	}
+
+	if accIDNull.Valid {
+		accountID = int(accIDNull.Int64)
+		hasAccount = true
+	}
+	if catIDNull.Valid {
+		categoryID = int(catIDNull.Int64)
+		hasCategory = true
+	}
+	if toAccIDNull.Valid {
+		toAccountID = int(toAccIDNull.Int64)
+		hasToAccount = true
+	}
+
+	today := time.Now().Format("2006-01-02")
+	now := time.Now().Format("2006-01-02 15:04:05")
+
+	if templateType == "transfer" {
+		if !hasAccount || !hasToAccount {
+			services.SendMessage(chatID, "範本缺少帳戶設定")
+			return
+		}
+		if amount <= 0 {
+			services.SendMessage(chatID, "範本金額必須大於 0")
+			return
+		}
+
+		fromName := resolveAccountName(accountID)
+		toName := resolveAccountName(toAccountID)
+		catID := getTransferCategoryID()
+
+		tx, err := initializers.DB.Begin()
+		if err != nil {
+			services.SendMessage(chatID, "系統錯誤")
+			return
+		}
+
+		tx.Exec("UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ?", amount, now, accountID)
+		tx.Exec("UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ?", amount, now, toAccountID)
+
+		outItem := fmt.Sprintf("轉帳至 %s", toName)
+		tx.Exec("INSERT INTO records (date, account_id, type, amount, item, category_id, note, created_at, updated_at) VALUES (?, ?, '支出', ?, ?, ?, ?, ?, ?)",
+			today, accountID, amount, outItem, catID, note, now, now)
+
+		inItem := fmt.Sprintf("從 %s 轉入", fromName)
+		tx.Exec("INSERT INTO records (date, account_id, type, amount, item, category_id, note, created_at, updated_at) VALUES (?, ?, '收入', ?, ?, ?, ?, ?, ?)",
+			today, toAccountID, amount, inItem, catID, note, now, now)
+
+		if err = tx.Commit(); err != nil {
+			services.SendMessage(chatID, "轉帳失敗")
+			return
+		}
+
+		successMsg := fmt.Sprintf("⚡✅ 快捷轉帳成功！\n\n📋 %s\n🏦 %s ➡️ %s\n💰 %.0f\n📅 %s", name, fromName, toName, amount, today)
+		services.EditMessageText(chatID, msgID, successMsg)
+
+	} else {
+		if !hasAccount || !hasCategory {
+			services.SendMessage(chatID, "範本缺少帳戶或分類設定")
+			return
+		}
+		if amount <= 0 {
+			services.SendMessage(chatID, "範本金額必須大於 0")
+			return
+		}
+		if item == "" {
+			services.SendMessage(chatID, "範本缺少項目名稱")
+			return
+		}
+
+		tx, err := initializers.DB.Begin()
+		if err != nil {
+			services.SendMessage(chatID, "系統錯誤")
+			return
+		}
+
+		tx.Exec("INSERT INTO records (date, account_id, type, amount, item, category_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			today, accountID, tmplType, amount, item, categoryID, note, now, now)
+
+		if tmplType == "支出" {
+			tx.Exec("UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ?", amount, now, accountID)
+		} else {
+			tx.Exec("UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ?", amount, now, accountID)
+		}
+
+		if err = tx.Commit(); err != nil {
+			services.SendMessage(chatID, "新增失敗")
+			return
+		}
+
+		accountName := resolveAccountName(accountID)
+		categoryName := resolveCategoryName(categoryID)
+
+		successMsg := fmt.Sprintf("⚡✅ 快捷新增成功！\n\n📋 %s\n📅 %s\n💰 %s %.0f\n📝 %s\n🏷 %s\n🏦 %s", name, today, tmplType, amount, item, categoryName, accountName)
+		services.EditMessageText(chatID, msgID, successMsg)
+	}
 }
 

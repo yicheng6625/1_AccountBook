@@ -56,6 +56,13 @@ func main() {
 		// 轉帳路由
 		api.POST("/transfer", controllers.CreateTransfer)
 
+		// 快捷新增範本路由
+		api.GET("/quick-add", controllers.GetQuickAddTemplates)
+		api.POST("/quick-add", controllers.CreateQuickAddTemplate)
+		api.PUT("/quick-add/:id", controllers.UpdateQuickAddTemplate)
+		api.DELETE("/quick-add/:id", controllers.DeleteQuickAddTemplate)
+		api.POST("/quick-add/:id/execute", controllers.ExecuteQuickAdd)
+
 		// 統計相關路由
 		api.GET("/statistics", controllers.GetStatistics)
 		api.GET("/statistics/summary", controllers.GetSummary)

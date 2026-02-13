@@ -412,6 +412,7 @@ func FormatUsage() string {
 指令列表：
 /new - 開始記帳
 /transfer - 帳戶轉帳
+/quickadd - 快捷新增（一鍵記帳）
 /recent - 查看最近紀錄
 /start - 顯示此說明
 /查詢分類 - 查看所有分類

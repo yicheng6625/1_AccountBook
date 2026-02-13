@@ -72,6 +72,26 @@ func createTables() {
 			FOREIGN KEY (category_id) REFERENCES categories(id)
 		)`,
 
+		// 快捷新增範本資料表
+		`CREATE TABLE IF NOT EXISTS quick_add_templates (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			name            TEXT    NOT NULL,
+			template_type   TEXT    NOT NULL DEFAULT 'record',
+			account_id      INTEGER,
+			type            TEXT    DEFAULT '支出',
+			amount          REAL    DEFAULT 0,
+			item            TEXT    DEFAULT '',
+			category_id     INTEGER,
+			note            TEXT    DEFAULT '',
+			to_account_id   INTEGER,
+			sort_order      INTEGER NOT NULL DEFAULT 0,
+			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (account_id)    REFERENCES accounts(id),
+			FOREIGN KEY (category_id)   REFERENCES categories(id),
+			FOREIGN KEY (to_account_id) REFERENCES accounts(id)
+		)`,
+
 		// 索引：加速日期查詢（首頁行事曆最常用）
 		`CREATE INDEX IF NOT EXISTS idx_records_date ON records(date)`,
 

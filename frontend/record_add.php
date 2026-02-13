@@ -9,6 +9,11 @@ include __DIR__ . '/components/header.php';
     <a href="/transfer_add.php" class="toggle-item">轉帳</a>
 </div>
 
+<div id="quickadd-bar" style="display:none;">
+    <div style="padding:8px 16px 0;font-size:12px;color:#999;">快捷新增</div>
+    <div id="quickadd-buttons" class="quickadd-bar-buttons"></div>
+</div>
+
 <form id="add-form">
     <div class="form-group">
         <label>日期</label>
@@ -127,7 +132,74 @@ include __DIR__ . '/components/header.php';
         }
     });
 
+    // 載入快捷新增按鈕
+    async function loadQuickAddButtons() {
+        try {
+            const templates = await API.getQuickAddTemplates();
+            if (!templates || templates.length === 0) return;
+
+            const bar = document.getElementById('quickadd-bar');
+            const container = document.getElementById('quickadd-buttons');
+            bar.style.display = 'block';
+
+            container.innerHTML = templates.map(t => {
+                const label = t.template_type === 'transfer'
+                    ? `${t.name}`
+                    : `${t.name}`;
+                return `<button type="button" class="quickadd-btn" data-id="${t.id}">${label}</button>`;
+            }).join('');
+
+            container.querySelectorAll('.quickadd-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    btn.textContent = '...';
+                    try {
+                        const result = await API.executeQuickAdd(btn.dataset.id);
+                        showToast(result.message || '新增成功');
+                        setTimeout(() => window.location.href = '/', 500);
+                    } catch (e) {
+                        showToast(e.message || '快捷新增失敗');
+                        btn.disabled = false;
+                        btn.textContent = btn.textContent;
+                        location.reload();
+                    }
+                });
+            });
+        } catch (e) {
+            // 靜默失敗
+        }
+    }
+
     init();
+    loadQuickAddButtons();
 </script>
+
+<style>
+.quickadd-bar-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 16px;
+}
+.quickadd-btn {
+    padding: 6px 14px;
+    border: 1px solid #4A90D9;
+    border-radius: 16px;
+    background: #fff;
+    color: #4A90D9;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.quickadd-btn:active {
+    background: #4A90D9;
+    color: #fff;
+}
+.quickadd-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+</style>
 
 <?php include __DIR__ . '/components/footer.php'; ?>
